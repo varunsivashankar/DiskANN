@@ -235,11 +235,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
+    std::vector<std::unordered_map<uint32_t,float>> _point_nbrs_dists;
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+                                                         const std::vector<LabelT> &filters, bool search_invocation, int32_t location = -1);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
@@ -301,6 +302,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t save_data(std::string filename);
     DISKANN_DLLEXPORT size_t save_tags(std::string filename);
     DISKANN_DLLEXPORT size_t save_delete_list(const std::string &filename);
+    DISKANN_DLLEXPORT size_t save_graph_dists(std::string filename);
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
@@ -308,6 +310,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t load_delete_set(AlignedFileReader &reader);
 #else
     DISKANN_DLLEXPORT size_t load_graph(const std::string filename, size_t expected_num_points);
+    DISKANN_DLLEXPORT size_t load_graph_dists(const std::string filename, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(std::string filename0);
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
@@ -324,6 +327,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Graph related data structures
     std::vector<std::vector<uint32_t>> _final_graph;
+    // std::vector<std::vector<uint32_t>> _final_graph_dists;
 
     // Dimensions
     size_t _dim = 0;
