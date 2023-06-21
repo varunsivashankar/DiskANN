@@ -2529,7 +2529,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     // T *aligned_query = scratch->aligned_query();
     // memcpy(aligned_query, query, _dim * sizeof(T));
     _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
-    auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
+    auto retval = iterate_to_fixed_point_multifilters(scratch->aligned_query(), L, init_ids, scratch, true, filter_labels, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
 
