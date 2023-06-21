@@ -897,12 +897,18 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 // Find common filter between a node's labels and a given set of labels, while taking into account universal label
 template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                   const std::vector<LabelT> &incoming_labels)
+                                                   const std::vector<LabelT> &incoming_labels, bool conjunction = false)
 {
     auto &curr_node_labels = _pts_to_labels[point_id];
     std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
+    
+    // Conjunction does not deal with universal label for now, not sure what desired behavior should be
+    if (conjunction){
+        return (common_filters.size() == incoming_labels.size())
+    } 
+
     if (common_filters.size() > 0)
     {
         // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
@@ -925,6 +931,254 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
     }
     return (common_filters.size() > 0);
 }
+
+
+// trolz
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_multifilters(
+    const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
+    bool use_filter, const std::vector<LabelT> &filter_labels, bool search_invocation)
+{
+    std::vector<Neighbor> &expanded_nodes = scratch->pool();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(Lsize);
+    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
+    boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
+    std::vector<uint32_t> &id_scratch = scratch->id_scratch();
+    std::vector<float> &dist_scratch = scratch->dist_scratch();
+    assert(id_scratch.size() == 0);
+
+    // REFACTOR
+    // T *aligned_query = scratch->aligned_query();
+    // memcpy(aligned_query, query, _dim * sizeof(T));
+    // if (_normalize_vecs)
+    //{
+    //     normalize((float *)aligned_query, _dim);
+    // }
+
+    T *aligned_query = scratch->aligned_query();
+
+    float *query_float = nullptr;
+    float *query_rotated = nullptr;
+    float *pq_dists = nullptr;
+    uint8_t *pq_coord_scratch = nullptr;
+    // Intialize PQ related scratch to use PQ based distances
+    if (_pq_dist)
+    {
+        // Get scratch spaces
+        PQScratch<T> *pq_query_scratch = scratch->pq_scratch();
+        query_float = pq_query_scratch->aligned_query_float;
+        query_rotated = pq_query_scratch->rotated_query;
+        pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+
+        // Copy query vector to float and then to "rotated" query
+        for (size_t d = 0; d < _dim; d++)
+        {
+            query_float[d] = (float)aligned_query[d];
+        }
+        pq_query_scratch->set(_dim, aligned_query);
+
+        // center the query and rotate if we have a rotation matrix
+        _pq_table.preprocess_query(query_rotated);
+        _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+
+        pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+    }
+
+    if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
+    {
+        throw ANNException("ERROR: Clear scratch space before passing.", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    // Decide whether to use bitset or robin set to mark visited nodes
+    auto total_num_points = _max_points + _num_frozen_pts;
+    bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
+
+    if (fast_iterate)
+    {
+        if (inserted_into_pool_bs.size() < total_num_points)
+        {
+            // hopefully using 2X will reduce the number of allocations.
+            auto resize_size =
+                2 * total_num_points > MAX_POINTS_FOR_USING_BITSET ? MAX_POINTS_FOR_USING_BITSET : 2 * total_num_points;
+            inserted_into_pool_bs.resize(resize_size);
+        }
+    }
+
+    // Lambda to determine if a node has been visited
+    auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](const uint32_t id) {
+        return fast_iterate ? inserted_into_pool_bs[id] == 0
+                            : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end();
+    };
+
+    // Lambda to batch compute query<-> node distances in PQ space
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](const std::vector<uint32_t> &ids,
+                                                            std::vector<float> &dists_out) {
+        diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks, pq_coord_scratch);
+        diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
+    };
+
+    // Initialize the candidate pool with starting points
+    for (auto id : init_ids)
+    {
+        if (id >= _max_points + _num_frozen_pts)
+        {
+            diskann::cerr << "Out of range loc found as an edge : " << id << std::endl;
+            throw diskann::ANNException(std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__, __FILE__,
+                                        __LINE__);
+        }
+
+        if (use_filter)
+        {
+            
+            bool match = false;
+            for (uint32_t i = 0; i < filter_labels.size(); i++){
+                if (detect_common_filters(id, search_invocation, filter_labels[i],true)){
+                    match = true;
+                    break;
+                }
+            }
+            if (match == false)
+                continue;
+            // if (!detect_common_filters(id, search_invocation, filter_label))
+            //     continue;
+        }
+
+        if (is_not_visited(id))
+        {
+            if (fast_iterate)
+            {
+                inserted_into_pool_bs[id] = 1;
+            }
+            else
+            {
+                inserted_into_pool_rs.insert(id);
+            }
+
+            float distance;
+            if (_pq_dist)
+            {
+                pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
+            }
+            else
+            {
+                distance = _data_store->get_distance(aligned_query, id);
+            }
+            Neighbor nn = Neighbor(id, distance);
+            best_L_nodes.insert(nn);
+        }
+    }
+
+    uint32_t hops = 0;
+    uint32_t cmps = 0;
+
+    while (best_L_nodes.has_unexpanded_node())
+    {
+        auto nbr = best_L_nodes.closest_unexpanded();
+        auto n = nbr.id;
+
+        // Add node to expanded nodes to create pool for prune later
+        if (!search_invocation)
+        {
+            if (!use_filter)
+            {
+                expanded_nodes.emplace_back(nbr);
+            }
+            else
+            { // in filter based indexing, the same point might invoke
+                // multiple iterate_to_fixed_points, so need to be careful
+                // not to add the same item to pool multiple times.
+                if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end())
+                {
+                    expanded_nodes.emplace_back(nbr);
+                }
+            }
+        }
+
+        // Find which of the nodes in des have not been visited before
+        id_scratch.clear();
+        dist_scratch.clear();
+        {
+            if (_dynamic_index)
+                _locks[n].lock();
+            for (auto id : _final_graph[n])
+            {
+                assert(id < _max_points + _num_frozen_pts);
+
+                if (use_filter)
+                {
+                    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+                    // if (!detect_common_filters(id, search_invocation, filter_label))
+                    //     continue;
+                    bool match = false;
+                    for (uint32_t i = 0; i < filter_labels.size(); i++){
+                        if (detect_common_filters(id, search_invocation, filter_labels[i],true)){
+                            match = true;
+                            break;
+                        }
+                    }
+                    if (match == false)
+                        continue;
+                }
+
+                if (is_not_visited(id))
+                {
+                    id_scratch.push_back(id);
+                }
+            }
+
+            if (_dynamic_index)
+                _locks[n].unlock();
+        }
+
+        // Mark nodes visited
+        for (auto id : id_scratch)
+        {
+            if (fast_iterate)
+            {
+                inserted_into_pool_bs[id] = 1;
+            }
+            else
+            {
+                inserted_into_pool_rs.insert(id);
+            }
+        }
+
+        // Compute distances to unvisited nodes in the expansion
+        if (_pq_dist)
+        {
+            assert(dist_scratch.capacity() >= id_scratch.size());
+            compute_dists(id_scratch, dist_scratch);
+        }
+        else
+        {
+            assert(dist_scratch.size() == 0);
+            for (size_t m = 0; m < id_scratch.size(); ++m)
+            {
+                uint32_t id = id_scratch[m];
+
+                if (m + 1 < id_scratch.size())
+                {
+                    auto nextn = id_scratch[m + 1];
+                    _data_store->prefetch_vector(nextn);
+                }
+
+                dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
+            }
+        }
+        cmps += (uint32_t)id_scratch.size();
+
+        // Insert <id, dist> pairs into the pool of candidates
+        for (size_t m = 0; m < id_scratch.size(); ++m)
+        {
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+        }
+    }
+    return std::make_pair(hops, cmps);
+}
+
+
+
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
@@ -2201,6 +2455,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     return retval;
 }
 
+// trolz
+
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const DataType &query,
                                                                            const std::string &raw_label, const size_t K,
@@ -2226,7 +2482,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
-std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &filter_label,
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, std::vector<std::vector<LabelT>> filter_labels,
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
@@ -2251,16 +2507,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end())
-    {
-        init_ids.emplace_back(_label_to_medoid_id[filter_label]);
+    for (uint32_t i = 0; i < filter_labels.size(); i++){
+        for (uint32_t j = 0; j < filter_labels[i].size(); j++){
+            filter_label = filter_labels[i][j];
+            if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end())
+            {
+                init_ids.emplace_back(_label_to_medoid_id[filter_label]);
+            }
+            else
+            {
+                diskann::cout << "No filtered medoid found. exitting "
+                            << std::endl; // RKNOTE: If universal label found start there
+                throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+            }
+        }
     }
-    else
-    {
-        diskann::cout << "No filtered medoid found. exitting "
-                      << std::endl; // RKNOTE: If universal label found start there
-        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-    }
+    
     filter_vec.emplace_back(filter_label);
 
     // REFACTOR
