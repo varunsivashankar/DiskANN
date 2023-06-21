@@ -1124,6 +1124,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     };
 
     // Initialize the candidate pool with starting points
+    bool do_approx = true;
+    float original_distance = 0;
     for (auto id : init_ids)
     {
         if (id >= _max_points + _num_frozen_pts)
@@ -1158,6 +1160,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             else
             {
                 distance = _data_store->get_distance(aligned_query, id);
+                original_distance += distance;
             }
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
@@ -1167,14 +1170,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
         }
     }
+    original_distance = original_distance / float(best_L_nodes.size());
 
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
+    uint32_t num_iters = 0;
     while (best_L_nodes.has_unexpanded_node())
     {
+        num_iters += 1;
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+        if (nbr.distance <= 0.4 * original_distance){
+            do_approx = false;
+            // std::cout << "Approx change num iters " << num_iters << std::endl;
+        }
+        // do_approx = false;
 
         // float max_dist = 0;
         // for (int lol = 0; lol < best_L_nodes.size(); lol++){
@@ -1269,9 +1280,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // at search time, location < 0
                 if (location < 0){
                     // distance = distance_qn + _point_nbrs_dists[n][id];
-                    distance = pow(pow(distance_qn,0.5) + pow(_point_nbrs_dists[n][id],0.5),2);
-                    distance = 0.4 * distance;
-                    distance = _data_store->get_distance(aligned_query, id);
+                    if(do_approx){
+                        distance = pow(pow(distance_qn,0.5) + pow(_point_nbrs_dists[n][id],0.5),2);
+                        // distance = _data_store->get_distance(aligned_query, id);
+                        // distance = 0.4 * distance;
+                        // float distance2 = _data_store->get_distance(aligned_query, id);
+                        // std::cout << "ratio " << distance/distance2 << std::endl;
+                    }
+                    else{
+                        distance = _data_store->get_distance(aligned_query, id);
+                    }
+                    // distance = _data_store->get_distance(aligned_query, id);
                     // distance = distance_qn + _point_nbrs_dists[n][id];
                     // float distance2 = _data_store->get_distance(aligned_query, id);
                     // float ratio = distance2 / distance;
@@ -1304,19 +1323,30 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // }
             }
         }
-        cmps += (uint32_t)id_scratch.size();
+        if (do_approx == false){
+            cmps += (uint32_t)id_scratch.size();
+        }
 
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
-        for (size_t i = 0; i < best_L_nodes.size(); i++){
-            uint32_t id = best_L_nodes[i].id;
-            float distance = _data_store->get_distance(aligned_query, id);
-            best_L_nodes[i].distance = distance;
-        }
+        // float avg_distance = 0;
+        // if ((num_iters % 10) == 0){
+        //     for (size_t i = 0; i < best_L_nodes.size(); i++){
+        //         uint32_t id = best_L_nodes[i].id;
+        //         float distance = _data_store->get_distance(aligned_query, id);
+        //         best_L_nodes[i].distance = distance;
+        //         // avg_distance += distance;
+        //     }
+        // }
+        // avg_distance = avg_distance / float(best_L_nodes.size());
+        // if (avg_distance <= 0.3 * original_distance){
+        //     do_approx = false;
+        // }
     }
+    // std::cout << "num iters " << num_iters << std::endl;
     return std::make_pair(hops, cmps);
 }
 
