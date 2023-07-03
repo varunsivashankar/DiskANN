@@ -1092,6 +1092,59 @@ inline std::vector<std::string> read_file_to_vector_of_strings(const std::string
     return result;
 }
 
+
+inline std::vector<std::vector<std::string>> parse_clauses(const std::string& input) {
+    std::vector<std::vector<std::string>> result;
+    std::stringstream ss(input);
+    std::string token;
+    while (getline(ss, token, ';')) {
+        std::vector<std::string> row;
+        std::stringstream row_ss(token);
+        std::string element;
+
+        while (getline(row_ss, element, ',')) {
+            row.push_back(element);
+        }
+        result.push_back(row);
+    }
+
+    return result;
+}
+
+
+inline std::vector<std::vector<std::vector<std::string>>> read_file_to_vector3_of_strings(const std::string &filename, bool unique = false)
+{
+    std::vector<std::vector<std::vector<std::string>>> result;
+    std::set<std::string> elementSet;
+    if (filename != "")
+    {
+        std::ifstream file(filename);
+        if (file.fail())
+        {
+            throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+        }
+        std::string line;
+        while (std::getline(file, line))
+        {
+            if (line.empty())
+            {
+                break;
+            }
+            if (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+            {
+                line.erase(line.size() - 1);
+            }
+            result.push_back(parse_clauses(line));
+        }
+        file.close();
+    }
+    else
+    {
+        throw diskann::ANNException(std::string("Failed to open file. filename can not be blank"), -1);
+    }
+    return result;
+}
+
 inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::robin_set<std::string> path_suffixes)
 {
     try

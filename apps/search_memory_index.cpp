@@ -29,7 +29,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::vector<std::string> &query_filters, const float fail_if_recall_below)
+                        const std::vector<std::vector<std::vector<std::string>>> &query_filters, const float fail_if_recall_below)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -163,11 +163,32 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search)
             {
-                std::string raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+                std::vector<std::vector<LabelT>> filter_labels_as_num;
+                std::vector<std::vector<std::string>> current_query_filters;
+                if (query_filters.size() == 1){
+                    current_query_filters = query_filters[0];
+                }
+                else{
+                    current_query_filters = query_filters[i];
+                }
 
-                auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
-                                                         query_result_ids[test_id].data() + i * recall_at,
-                                                         query_result_dists[test_id].data() + i * recall_at);
+                uint32_t num_clauses = current_query_filters.size();
+                filter_labels_as_num.resize(num_clauses);
+                for (uint32_t j = 0; j < num_clauses; j++){
+
+                    uint32_t num_queries_in_clause = current_query_filters[j].size();
+                    std::vector<LabelT> current_clause(num_queries_in_clause);
+
+                    for (uint32_t k = 0; k < num_queries_in_clause; k++){
+                        uint32_t filter_label_as_num = index.get_converted_label(current_query_filters[j][k]);
+                        current_clause[k] = filter_label_as_num;
+                    }
+                    filter_labels_as_num[j] = current_clause;
+                }
+
+                auto retval = index.search_with_filters(query + i * query_aligned_dim, filter_labels_as_num, recall_at,
+                                                        L, query_result_ids[test_id].data() + i * recall_at,
+                                                        query_result_dists[test_id].data() + i * recall_at);
                 cmp_stats[i] = retval.second;
             }
             else if (metric == diskann::FAST_L2)
@@ -373,14 +394,15 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    std::vector<std::string> query_filters;
+    std::vector<std::vector<std::vector<std::string>>> query_filters;
     if (filter_label != "")
     {
-        query_filters.push_back(filter_label);
+        std::vector<std::vector<std::string>> single_filter_vec = {{filter_label}};
+        query_filters.push_back(single_filter_vec);
     }
     else if (query_filters_file != "")
     {
-        query_filters = read_file_to_vector_of_strings(query_filters_file);
+        query_filters = read_file_to_vector3_of_strings(query_filters_file);
     }
 
     try

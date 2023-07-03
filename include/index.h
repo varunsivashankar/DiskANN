@@ -86,8 +86,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
 
-    DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                 const std::vector<LabelT> &incoming_labels);
+    // DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
+    //                                              const std::vector<LabelT> &incoming_labels, bool conjunction);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -141,7 +141,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Filter support search
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, std::vector<std::vector<LabelT>> filter_labels,
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
@@ -253,6 +253,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                          const std::vector<uint32_t> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
+    
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point_multifilters(
+    const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
+    bool use_filter, const std::vector<std::vector<LabelT>> &filter_labels, bool search_invocation);
+
+    bool detect_common_filters(uint32_t point_id, bool search_invocation,
+                                                   const std::vector<LabelT> &incoming_labels, bool conjunction = false);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
