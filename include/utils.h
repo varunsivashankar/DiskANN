@@ -1105,9 +1105,12 @@ inline std::vector<std::vector<std::string>> parse_clauses(const std::string& in
         while (getline(row_ss, element, ',')) {
             row.push_back(element);
         }
+        std::sort(row.begin(), row.end());
         result.push_back(row);
     }
-
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        return a.front() < b.front();
+    });
     return result;
 }
 
